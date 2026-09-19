@@ -104,6 +104,6 @@ jobs:
           # bandera, curl devuelve exito aunque le contesten 401, y te queda
           # un deploy que "salio bien" y nunca ocurrio.
           # -sS calla la barra de progreso pero deja pasar los errores.
-          curl -fsS -X POST "$URL_DE_DEPLOY"
+          curl -4 -v --connect-timeout 15 -fsS -X POST "$URL_DE_DEPLOY"
           echo ""
           echo "Redespliegue disparado. Segui el avance en el panel."
