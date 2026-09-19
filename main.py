@@ -57,7 +57,7 @@ async def ciclo_de_vida(app: FastAPI):
 
 app = FastAPI(
     title="Calculadora API",
-    description="API didactica de 4 operaciones. Historial opcional en Postgres.",
+    description="API didactica de 5 operaciones. Historial opcional en Postgres.",
     version="3.0.0",
     lifespan=ciclo_de_vida,
 )
@@ -199,7 +199,7 @@ app.add_middleware(
 # rechaza solo todo lo que no encaje, con un 422 y un mensaje explicando que
 # campo esta mal.
 
-Operacion = Literal["suma", "resta", "multiplicacion", "division"]
+Operacion = Literal["suma", "resta", "multiplicacion", "division", "potencia"]
 
 # Tabla unica: cada operacion sabe su simbolo y como se calcula.
 # Un solo lugar para agregar una operacion nueva -> un solo lugar donde
@@ -214,6 +214,7 @@ OPERACIONES: dict[str, tuple[str, Callable[[float, float], float]]] = {
     "resta": ("-", lambda a, b: a - b),
     "multiplicacion": ("*", lambda a, b: a * b),
     "division": ("/", lambda a, b: a / b),
+    "potencia": ("**", lambda a, b: a ** b),
 }
 
 
@@ -316,7 +317,52 @@ def calcular(datos: OperacionRequest) -> OperacionResponse:
         # No es un 500: el servidor esta perfecto, el pedido es el invalido.
         raise HTTPException(status_code=400, detail="No se puede dividir por cero.")
 
-    resultado = calcular_fn(datos.a, datos.b)
+    # Regla de negocio 1b: cero elevado a exponente negativo.
+    # En Python 0.0 ** -2.0 lanza ZeroDivisionError. Es pedido invalido (400),
+    # igual que division por cero, no un 500.
+    if datos.operacion == "potencia" and datos.a == 0 and datos.b < 0:
+        raise HTTPException(
+            status_code=400,
+            detail="No se puede elevar cero a un exponente negativo.",
+        )
+
+    try:
+        resultado = calcular_fn(datos.a, datos.b)
+    except ZeroDivisionError:
+        # Red de seguridad por si algun caso 0**negativo pasa el chequeo
+        # de arriba (p. ej. -0.0). Mismo 400 que division por cero.
+        raise HTTPException(
+            status_code=400,
+            detail="No se puede elevar cero a un exponente negativo.",
+        )
+    except OverflowError:
+        # a ** b desborda distinto que suma/multiplicacion: no devuelve inf,
+        # LANZA OverflowError (verificado: 2.0**1024.0, 10.0**309.0).
+        # Sin este catch terminaria en 500. Es el mismo 400 de "fuera de rango".
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "El resultado quedo fuera del rango que puede representar la "
+                "computadora (mas o menos 1.8e308). Probá con numeros mas chicos."
+            ),
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Operacion no valida con los valores dados.",
+        )
+
+    # Base negativa con exponente fraccionario: Python devuelve complex
+    # (verificado: -8.0**0.5 = (...+...j)). math.isfinite(complex) lanzaria
+    # TypeError -> 500. Es pedido invalido (400), no error del servidor.
+    if isinstance(resultado, complex):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No se puede elevar un numero negativo a un exponente "
+                "fraccionario (el resultado no es un numero real)."
+            ),
+        )
 
     # Regla de negocio 2: el resultado tiene que entrar en un float.
     # Los dos operandos pueden ser finitos y perfectamente validos, y aun asi
